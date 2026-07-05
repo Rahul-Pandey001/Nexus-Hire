@@ -7,22 +7,12 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
-
-/**
- * Handles user registration and login.
- * Public endpoints — no JWT required.
- */
 @RestController
 @RequestMapping("/api/auth")
 public class AuthController {
 
     @Autowired
     private AuthService authService;
-
-    /**
-     * Register a new user.
-     * POST /api/auth/register
-     */
     @PostMapping("/register")
     public ResponseEntity<?> register(@RequestBody User user) {
         try {
@@ -36,10 +26,7 @@ public class AuthController {
         }
     }
 
-    /**
-     * Login and receive a JWT token.
-     * POST /api/auth/login
-     */
+  
     @PostMapping("/login")
     public ResponseEntity<?> login(@RequestBody Map<String, String> credentials) {
         try {
