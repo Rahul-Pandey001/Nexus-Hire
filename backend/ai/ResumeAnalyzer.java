@@ -5,68 +5,39 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
-
-/**
- * Analyzes resume text to produce a quality score (0–100)
- * and actionable improvement suggestions.
- *
- * Scoring Breakdown (total 100 pts):
- *   - Skills count     : up to 40 pts  (2 pts per skill, max 20 skills)
- *   - Experience section: 20 pts
- *   - Education section : 20 pts
- *   - Projects section  : 15 pts
- *   - Summary/Objective : 5 pts
- */
 @Component
 public class ResumeAnalyzer {
 
     @Autowired
     private SkillExtractor skillExtractor;
-
-    /**
-     * Calculate a resume quality score from 0 to 100.
-     */
     public int calculateScore(String resumeText) {
         if (resumeText == null || resumeText.isBlank()) return 0;
 
         String lower = resumeText.toLowerCase();
         int score = 0;
 
-        // 1. Skills score (2 pts per skill, max 40 pts)
+     
         List<String> skills = skillExtractor.extractSkills(resumeText);
         int skillScore = Math.min(skills.size() * 2, 40);
         score += skillScore;
-
-        // 2. Experience section (20 pts)
         if (lower.contains("experience") || lower.contains("work history")) {
             score += 20;
         }
 
-        // 3. Education section (20 pts)
+
         if (lower.contains("education") || lower.contains("university") ||
                 lower.contains("college") || lower.contains("degree")) {
             score += 20;
         }
-
-        // 4. Projects section (15 pts)
         if (lower.contains("project") || lower.contains("portfolio")) {
             score += 15;
         }
-
-        // 5. Summary / Objective section (5 pts)
         if (lower.contains("summary") || lower.contains("objective") ||
                 lower.contains("profile")) {
             score += 5;
         }
-
-        // Clamp to 100
         return Math.min(score, 100);
     }
-
-    /**
-     * Generate a list of specific improvement suggestions
-     * based on what sections or skills are missing.
-     */
     public List<String> getSuggestions(String resumeText) {
         List<String> suggestions = new ArrayList<>();
 
