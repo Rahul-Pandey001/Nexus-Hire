@@ -9,23 +9,12 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.Map;
-
-/**
- * Handles resume upload and retrieval for the authenticated user.
- * All endpoints require JWT authentication.
- */
 @RestController
 @RequestMapping("/api/resumes")
 public class ResumeController {
 
     @Autowired
     private ResumeService resumeService;
-
-    /**
-     * Upload a resume file.
-     * POST /api/resumes/upload
-     * Accepts multipart/form-data with key "file"
-     */
     @PostMapping("/upload")
     public ResponseEntity<?> uploadResume(
             @RequestParam("file") MultipartFile file,
@@ -42,12 +31,7 @@ public class ResumeController {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
     }
-
-    /**
-     * Get the currently logged-in user's resume info.
-     * GET /api/resumes/my
-     */
-    @GetMapping("/my")
+    @GetMapping("/my{id}")
     public ResponseEntity<?> getMyResume(Authentication authentication) {
         String email = authentication.getName();
         return resumeService.getResumeByUser(email)
@@ -55,11 +39,8 @@ public class ResumeController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
-    /**
-     * Delete the currently logged-in user's resume.
-     * DELETE /api/resumes/my
-     */
-    @DeleteMapping("/my")
+   
+    @DeleteMapping("/my/{id}")
     public ResponseEntity<?> deleteMyResume(Authentication authentication) {
         try {
             String email = authentication.getName();
