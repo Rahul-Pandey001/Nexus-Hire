@@ -1,903 +1,999 @@
-const BASE_URL = 'http://localhost:8080';
-function getToken() {
-  return localStorage.getItem('nh_token') || '';
-}
-function setToken(token) {
-  localStorage.setItem('nh_token', token);
 
+"use strict";
+const BASE_URL = "";
+function getToken() {
+    return localStorage.getItem("nh_token") || "";
 }
+
+function setToken(token) {
+    if (typeof token !== "string" || !token.trim()) {
+        throw new Error("The server did not return an authentication token.");
+    }
+
+    localStorage.setItem("nh_token", token);
+}
+
 function clearToken() {
-  localStorage.removeItem('nh_token');
+    localStorage.removeItem("nh_token");
 }
-function authHeaders() {
-  const token = getToken();
-  return {
-    'Content-Type': 'application/json',
-    ...(token && { Authorization: 'Bearer ' + token })
-  };
+
+function authHeaders(extraHeaders = {}) {
+    const headers = {
+        ...extraHeaders
+    };
+
+    if (getToken()) {
+        headers.Authorization = "Bearer " + getToken();
+    }
+
+    return headers;
+}
+
+async function readResponse(response) {
+    const text = await response.text();
+
+    if (!text) return null;
+
+    try {
+        return JSON.parse(text);
+    } catch {
+        return text;
+    }
 }
 
 async function apiFetch(path, options = {}) {
-  const res = await fetch(BASE_URL + path, {
-    ...options,
-    headers: {
-      ...authHeaders(),
-      ...(options.headers || {})
+    const headers = authHeaders(options.headers || {});
+
+    if (
+        options.body &&
+        !(options.body instanceof FormData) &&
+        !headers["Content-Type"]
+    ) {
+        headers["Content-Type"] = "application/json";
     }
-  });
 
-  if (res.status === 401) {
-    clearToken();
-    showAuthSection();
-    showToast('Session expired. Please log in again.', 'error');
-    throw new Error('Unauthorized');
-  }
+    const response = await fetch(BASE_URL + path, {
+        ...options,
+        headers
+    });
 
-  if (!res.ok) {
-    let errMsg = '';
+    const data = await readResponse(response);
+
+    if (!response.ok) {
+        const message =
+            typeof data === "object" && data !== null
+                ? data.message || data.error || JSON.stringify(data)
+                : data || `HTTP ${response.status}`;
+
+        // Don't clear the token on 403.
+        // A 403 means forbidden, not necessarily an expired login.
+        if (response.status === 401) {
+            clearToken();
+        }
+
+        throw new Error(message);
+    }
+
+    return data;
+}
+
+function showToast(message, type = "success") {
+    const container = document.getElementById("toast-container");
+
+    if (!container) {
+        console.log(message);
+        return;
+    }
+
+    const toast = document.createElement("div");
+    toast.className = `toast ${type}`;
+    toast.textContent = message;
+    container.appendChild(toast);
+
+    setTimeout(() => {
+        toast.classList.add("out");
+        setTimeout(() => toast.remove(), 350);
+    }, 3000);
+}
+// LOGIN
+async function login(email, password) {
     try {
-      const data = await res.json();
-      errMsg = data.message || JSON.stringify(data);
-    } catch {
-      errMsg = await res.text();
+        const data = await apiFetch("/api/auth/login", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                email: email.trim(),
+                password: password
+            })
+        });
+
+        const token =
+            data?.token ||
+            data?.accessToken ||
+            data?.jwt ||
+            data?.access_token;
+
+        if (!token) {
+            console.error("Login response did not contain a token:", data);
+            throw new Error(
+                "Login response has no token. Check your backend login response."
+            );
+        }
+
+        // Save the token before navigating.
+        setToken(token);
+
+        const message = document.getElementById("loginMessage");
+
+        if (message) {
+            message.textContent = "Login successful!";
+            message.style.color = "green";
+        }
+
+        showToast("Login successful!", "success");
+
+        // Navigate only after the token has been stored.
+        window.location.replace("/dashboard");
+
+    } catch (error) {
+        console.error("Login error:", error);
+
+        const message = document.getElementById("loginMessage");
+
+        if (message) {
+            message.textContent = error.message;
+            message.style.color = "red";
+        }
+
+        showToast("Login failed: " + error.message, "error");
     }
-    throw new Error(errMsg || `HTTP ${res.status}`);
-  }
-
-  const text = await res.text();
-  return text ? JSON.parse(text) : null;
 }
+
+// Supports login forms using either naming convention.
+function handleLoginSubmit(event) {
+    if (event) event.preventDefault();
+
+    const email =
+        document.getElementById("loginEmail")?.value ||
+        document.getElementById("login-email")?.value ||
+        "";
+
+    const password =
+        document.getElementById("loginPassword")?.value ||
+        document.getElementById("login-pass")?.value ||
+        document.getElementById("login-password")?.value ||
+        "";
+
+    if (!email.trim() || !password) {
+        showToast("Enter your email and password.", "error");
+        return;
+    }
+
+    login(email, password);
+}
+
+// REGISTRATION
+async function register(name, email, password) {
+    try {
+        const data = await apiFetch("/api/auth/register", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                name: name.trim(),
+                email: email.trim(),
+                password: password
+            })
+        });
+
+        const message = document.getElementById("registerMessage");
+
+        if (message) {
+            message.textContent =
+                "Account created. You can now log in.";
+            message.style.color = "green";
+        }
+
+        showToast("Account created successfully!", "success");
+
+        // Registration does not automatically log the user in.
+        setTimeout(() => {
+            const loginPanel = document.getElementById("login-panel");
+            const signupPanel = document.getElementById("signup-panel");
+
+            if (loginPanel && signupPanel) {
+                switchAuth("login");
+            } else {
+                window.location.replace("/login");
+            }
+        }, 800);
+
+    } catch (error) {
+        console.error("Registration error:", error);
+
+        const message = document.getElementById("registerMessage");
+
+        if (message) {
+            message.textContent = error.message;
+            message.style.color = "red";
+        }
+
+        showToast("Registration failed: " + error.message, "error");
+    }
+}
+
+function handleRegisterSubmit(event) {
+    if (event) event.preventDefault();
+
+    const name =
+        document.getElementById("reg-name")?.value ||
+        document.getElementById("name")?.value ||
+        "";
+
+    const email =
+        document.getElementById("reg-email")?.value ||
+        document.getElementById("email")?.value ||
+        "";
+
+    const password =
+        document.getElementById("reg-password")?.value ||
+        document.getElementById("password")?.value ||
+        "";
+
+    if (!name.trim() || !email.trim() || !password) {
+        showToast("Please fill in all fields.", "error");
+        return;
+    }
+
+    register(name, email, password);
+}
+
 function switchAuth(type) {
-  const loginPanel  = document.getElementById('login-panel');
-  const signupPanel = document.getElementById('signup-panel');
+    const loginPanel = document.getElementById("login-panel");
+    const signupPanel = document.getElementById("signup-panel");
 
-  if (!loginPanel || !signupPanel) return;
+    if (!loginPanel || !signupPanel) return;
 
-  if (type === 'signup') {
-    loginPanel.classList.add('hidden');
-    signupPanel.classList.remove('hidden');
-  } else {
-    loginPanel.classList.remove('hidden');
-    signupPanel.classList.add('hidden');
-  }
+    const showSignup = type === "signup";
+
+    loginPanel.classList.toggle("hidden", showSignup);
+    signupPanel.classList.toggle("hidden", !showSignup);
 }
-let currentTheme = localStorage.getItem('nh_theme') || 'dark';
-document.documentElement.setAttribute('data-theme', currentTheme);
+// LOGOUT
+function logout() {
 
-function toggleTheme() {
-  currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
-  document.documentElement.setAttribute('data-theme', currentTheme);
-  localStorage.setItem('nh_theme', currentTheme);
-  const btn = document.getElementById('theme-btn');
-  if (btn) btn.textContent = currentTheme === 'dark' ? '◑' : '◐';
-  showToast(`Switched to ${currentTheme} mode`, 'info');
-  reRenderCharts();
+    clearToken();
+    window.location.replace("/login");
 }
-function showToast(msg, type = 'success') {
-  const c = document.getElementById('toast-container');
-  if (!c) return;
-  const t = document.createElement('div');
-  const icons = { success: '✓', error: '✕', info: 'ℹ' };
-  t.className = `toast ${type}`;
-  t.innerHTML = `<span>${icons[type] || '•'}</span><span>${msg}</span>`;
-  c.appendChild(t);
-  setTimeout(() => {
-    t.classList.add('out');
-    setTimeout(() => t.remove(), 350);
-  }, 3000);
+// CURRENT USER
+async function fetchCurrentUser() {
+    try {
+        const user = await apiFetch("/api/auth/me");
+
+        const nameElement = document.getElementById("user-name");
+
+        if (nameElement && user) {
+            nameElement.textContent =
+                user.name || user.email || "User";
+        }
+
+        return user;
+    } catch (error) {
+        console.error("Could not load current user:", error);
+        return null;
+    }
 }
 
-// ── STATE ─────────────────────────────────────────────────────
 const state = {
-  jobs: [],           // from JobController
-  applications: [],   // from ApplicationController
-  resumes: [],        // from ResumeController
-  filter: 'all',
-  search: '',
-  currentUser: null
+    jobs: [],
+    applications: [],
+    filter: "all",
+    search: ""
 };
 
-// ═══════════════════════════════════════════════════════════════
-// AUTH  →  AuthController
-// POST /api/auth/register
-// POST /api/auth/login
-// POST /api/auth/logout
-// GET  /api/auth/me
-// ═══════════════════════════════════════════════════════════════
-
-async function login(email, password) {
-  try {
-    const data = await apiFetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
-    });
-
-    // Spring Boot typically returns { token, user } or { accessToken, user }
-    const token = data.token || data.accessToken || data.jwt || '';
-    if (token) setToken(token);
-
-    state.currentUser = data.user || data;
-    showToast('Logged in successfully!', 'success');
-    showAppSection();
-    initApp();
-  } catch (err) {
-    showToast('Login failed: ' + err.message, 'error');
-  }
-}
-
-async function register(name, email, password) {
-  try {
-    const data = await apiFetch('/api/auth/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, email, password })
-    });
-
-    const token = data.token || data.accessToken || data.jwt || '';
-    if (token) setToken(token);
-
-    state.currentUser = data.user || data;
-    showToast('Account created!', 'success');
-    showAppSection();
-    initApp();
-  } catch (err) {
-    showToast('Registration failed: ' + err.message, 'error');
-  }
-}
-
-async function logout() {
-  try {
-    await apiFetch('/api/auth/logout', { method: 'POST' });
-  } catch (_) {
-    // logout best-effort
-  } finally {
-    clearToken();
-    state.currentUser = null;
-    state.jobs = [];
-    state.applications = [];
-    showAuthSection();
-    showToast('Logged out.', 'info');
-  }
-}
-
-async function fetchCurrentUser() {
-  try {
-    state.currentUser = await apiFetch('/api/auth/me');
-    const nameEl = document.getElementById('user-name');
-    if (nameEl && state.currentUser)
-      nameEl.textContent = state.currentUser.name || state.currentUser.email || 'User';
-  } catch (_) {
-    // not fatal
-  }
-}
-function showAuthSection() {
-  const auth = document.getElementById('auth-overlay');
-  const app  = document.getElementById('app');
-  if (auth) auth.classList.remove('hidden');
-  if (app)  app.classList.add('hidden');
-}
-function showAppSection() {
-  const auth = document.getElementById('auth-overlay');
-  const app  = document.getElementById('app');
-  if (auth) auth.classList.add('hidden');
-  if (app)  app.classList.remove('hidden');
-}
-function handleLoginSubmit(e) {
-  if (e) e.preventDefault();
-  const email = document.getElementById('login-email')?.value.trim();
-  // FIX 2: Corrected ID from 'login-password' to 'login-pass' (matching index.html)
-  const password = document.getElementById('login-pass')?.value.trim();
-  if (!email || !password) { showToast('Email and password required', 'error'); return; }
-  login(email, password);
-}
-
-function handleRegisterSubmit(e) {
-  if (e) e.preventDefault();
-  const name     = document.getElementById('reg-name')?.value.trim();
-  const email    = document.getElementById('reg-email')?.value.trim();
-  const password = document.getElementById('reg-password')?.value.trim();
-  if (!name || !email || !password) { showToast('All fields required', 'error'); return; }
-  register(name, email, password);
-}
 async function fetchJobs() {
-  try {
-    const data = await apiFetch('/api/jobs');
-    state.jobs = Array.isArray(data) ? data : (data.content || data.jobs || []);
-    renderJobs();
-    updateStats();
-    updateSidebarCounts();
-    reRenderCharts();
-  } catch (err) {
-    showToast('Failed to load jobs: ' + err.message, 'error');
-  }
+    try {
+        const data = await apiFetch("/api/jobs");
+
+        state.jobs = Array.isArray(data)
+            ? data
+            : data?.content || data?.jobs || [];
+
+       renderJobs();
+       updateStats();
+       updateApplicationStats();
+       updateSidebarCounts();
+       reRenderCharts();
+
+        return state.jobs;
+    } catch (error) {
+        console.error("Failed to load jobs:", error);
+        showToast("Could not load jobs: " + error.message, "error");
+        throw error;
+    }
 }
 
 async function createJob(jobData) {
-  try {
-    const newJob = await apiFetch('/api/jobs', {
-      method: 'POST',
-      body: JSON.stringify(jobData)
-    });
-    state.jobs.unshift(newJob);
-    renderJobs();
-    updateStats();
-    updateSidebarCounts();
-    reRenderCharts();
-    showToast('Job added!', 'success');
-    return newJob;
-  } catch (err) {
-    showToast('Failed to add job: ' + err.message, 'error');
-    return null;
-  }
+    try {
+        const job = await apiFetch("/api/jobs", {
+            method: "POST",
+            body: JSON.stringify(jobData)
+        });
+
+        state.jobs.unshift(job);
+        renderJobs();
+        updateStats();
+        updateSidebarCounts();
+        reRenderCharts();
+
+        showToast("Job created!", "success");
+        return job;
+    } catch (error) {
+        showToast("Could not create job: " + error.message, "error");
+        return null;
+    }
 }
 
 async function updateJob(id, jobData) {
-  try {
-    const updated = await apiFetch(`/api/jobs/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(jobData)
-    });
-    const idx = state.jobs.findIndex(j => j.id === id);
-    if (idx !== -1) state.jobs[idx] = updated;
-    renderJobs();
-    updateStats();
-    updateSidebarCounts();
-    reRenderCharts();
-    showToast('Job updated!', 'success');
-    return updated;
-  } catch (err) {
-    showToast('Failed to update job: ' + err.message, 'error');
-    return null;
-  }
+    try {
+        const job = await apiFetch(`/api/jobs/${id}`, {
+            method: "PUT",
+            body: JSON.stringify(jobData)
+        });
+
+        const index = state.jobs.findIndex(item => item.id === id);
+
+        if (index !== -1) {
+            state.jobs[index] = job;
+        }
+
+        renderJobs();
+        updateStats();
+        updateSidebarCounts();
+        reRenderCharts();
+
+        showToast("Job updated!", "success");
+        return job;
+    } catch (error) {
+        showToast("Could not update job: " + error.message, "error");
+        return null;
+    }
 }
 
 async function deleteJob(id) {
-  try {
-    await apiFetch(`/api/jobs/${id}`, { method: 'DELETE' });
-    state.jobs = state.jobs.filter(j => j.id !== id);
+    try {
+        await apiFetch(`/api/jobs/${id}`, {
+            method: "DELETE"
+        });
+
+        state.jobs = state.jobs.filter(job => job.id !== id);
+
+        renderJobs();
+        updateStats();
+        updateSidebarCounts();
+        reRenderCharts();
+
+        showToast("Job deleted.", "success");
+    } catch (error) {
+        showToast("Could not delete job: " + error.message, "error");
+    }
+}
+
+function renderJobs() {
+    const tbody = document.getElementById("jobsTableBody");
+    if (!tbody) return;
+
+    const message = document.getElementById("jobsMessage");
+
+    if (!state.jobs.length) {
+        tbody.replaceChildren();
+
+        if (message) {
+            message.textContent = "No jobs yet. Click Add Job to create one.";
+        }
+        return;
+    }
+
+    if (message) {
+        message.textContent = `${state.jobs.length} job(s) found.`;
+    }
+
+    tbody.innerHTML = state.jobs.map(job => `
+        <tr>
+            <td>${escapeHtml(job.title || "")}</td>
+            <td>${escapeHtml(job.company || "")}</td>
+            <td>${escapeHtml(job.location || "—")}</td>
+            <td>${escapeHtml(job.jobType || "—")}</td>
+            <td>
+                <button type="button"
+                    onclick="editJob(${Number(job.id)})">
+                    Edit
+                </button>
+
+                <button type="button"
+                    onclick="confirmDeleteJob(${Number(job.id)})">
+                    Delete
+                </button>
+            </td>
+        </tr>
+    `).join("");
+}
+
+
+function confirmDeleteJob(id) {
+    if (confirm("Are you sure you want to delete this job?")) {
+        deleteJob(id);
+    }
+}
+
+function openJobForm(job = null) {
+    const form = document.getElementById("jobForm");
+    if (!form) {
+        showToast("Job form not found. Check dashboard.html.", "error");
+        return;
+    }
+
+    form.reset();
+
+    document.getElementById("jobId").value = job?.id ?? "";
+    document.getElementById("jobTitle").value = job?.title ?? "";
+    document.getElementById("jobCompany").value = job?.company ?? "";
+    document.getElementById("jobLocation").value = job?.location ?? "";
+    document.getElementById("jobType").value = job?.jobType ?? "";
+    document.getElementById("jobDescription").value =
+        job?.description ?? "";
+
+    document.getElementById("jobFormTitle").textContent =
+        job ? "Edit Job" : "Add Job";
+
+    form.classList.remove("hidden");
+}
+
+function editJob(id) {
+    const job = state.jobs.find(
+        item => Number(item.id) === Number(id)
+    );
+
+    if (!job) {
+        showToast("Job not found.", "error");
+        return;
+    }
+
+    openJobForm(job);
+}
+
+// Add and edit job form controls
+document.addEventListener("DOMContentLoaded", () => {
+    document.getElementById("addJobButton")
+        ?.addEventListener("click", () => openJobForm());
+
+    document.getElementById("cancelJobButton")
+        ?.addEventListener("click", () => {
+            document.getElementById("jobForm")
+                ?.classList.add("hidden");
+        });
+
+    document.getElementById("jobForm")
+        ?.addEventListener("submit", async event => {
+            event.preventDefault();
+
+            const id = document.getElementById("jobId").value;
+
+            const jobData = {
+                title: document.getElementById("jobTitle").value.trim(),
+                company: document.getElementById("jobCompany").value.trim(),
+                location: document.getElementById("jobLocation").value.trim(),
+                jobType: document.getElementById("jobType").value,
+                description: document.getElementById("jobDescription").value.trim()
+            };
+
+            if (!jobData.title || !jobData.company) {
+                showToast(
+                    "Job title and company are required.",
+                    "error"
+                );
+                return;
+            }
+
+            const submitButton = event.submitter;
+            if (submitButton) submitButton.disabled = true;
+
+            try {
+                const savedJob = await apiFetch(
+                    id ? `/api/jobs/${id}` : "/api/jobs",
+                    {
+                        method: id ? "PUT" : "POST",
+                        body: JSON.stringify(jobData)
+                    }
+                );
+
+                if (id) {
+                    const index = state.jobs.findIndex(
+                        job => Number(job.id) === Number(id)
+                    );
+
+                    if (index !== -1) {
+                        state.jobs[index] = savedJob;
+                    } else {
+                        state.jobs.unshift(savedJob);
+                    }
+                } else {
+                    state.jobs.unshift(savedJob);
+                }
+
+                renderJobs();
+                updateStats();
+                updateSidebarCounts();
+                reRenderCharts();
+
+                document.getElementById("jobForm")
+                    .classList.add("hidden");
+                document.getElementById("jobForm").reset();
+
+                showToast(
+                    id ? "Job updated successfully!" : "Job added successfully!",
+                    "success"
+                );
+            } catch (error) {
+                showToast("Could not save job: " + error.message, "error");
+            } finally {
+                if (submitButton) submitButton.disabled = false;
+            }
+        });
+
+    document.getElementById("refreshJobs")
+        ?.addEventListener("click", async () => {
+            try {
+                await fetchJobs();
+                showToast("Jobs refreshed.", "success");
+            } catch (error) {
+                // fetchJobs already displays the error.
+            }
+        });
+});
+
+function handleSearch(value) {
+    state.search = String(value || "").toLowerCase().trim();
     renderJobs();
-    updateStats();
-    updateSidebarCounts();
-    reRenderCharts();
-    showToast('Job removed.', 'info');
-  } catch (err) {
-    showToast('Failed to delete job: ' + err.message, 'error');
-  }
 }
 
-async function fetchJobById(id) {
-  try {
-    return await apiFetch(`/api/jobs/${id}`);
-  } catch (err) {
-    showToast('Failed to fetch job: ' + err.message, 'error');
-    return null;
-  }
+function setFilter(filter, element) {
+    state.filter = filter;
+
+    document.querySelectorAll(".sidebar-item").forEach(item => {
+        item.classList.remove("active");
+    });
+
+    if (element) element.classList.add("active");
+
+    renderJobs();
 }
+
+function setView(filter, element) {
+    setFilter(filter, element);
+}
+
+
 async function fetchApplications() {
-  try {
-    const data = await apiFetch('/api/applications');
-    state.applications = Array.isArray(data) ? data : (data.content || data.applications || []);
-    renderApplications();
-  } catch (err) {
-    showToast('Failed to load applications: ' + err.message, 'error');
-  }
+    try {
+        const data = await apiFetch("/api/applications");
+
+        state.applications = Array.isArray(data)
+            ? data
+            : data?.content || data?.applications || [];
+
+        renderApplications();
+        updateApplicationStats();
+
+        return state.applications;
+    } catch (error) {
+        console.error("Failed to load applications:", error);
+        showToast("Could not load applications: " + error.message, "error");
+        return [];
+    }
 }
 
-async function createApplication(appData) {
-  try {
-    const newApp = await apiFetch('/api/applications', {
-      method: 'POST',
-      body: JSON.stringify(appData)
-    });
-    state.applications.unshift(newApp);
-    renderApplications();
-    showToast('Application saved!', 'success');
-    return newApp;
-  } catch (err) {
-    showToast('Failed to save application: ' + err.message, 'error');
-    return null;
-  }
+function updateApplicationStats() {
+setText("totalJobs", state.jobs.length);
+    const applications = state.applications;
+
+    const totalApplications = applications.length;
+
+    const interviews = applications.filter(
+        application =>
+            String(application.status || "").toUpperCase() === "INTERVIEW"
+    ).length;
+
+    const rejected = applications.filter(
+        application =>
+            String(application.status || "").toUpperCase() === "REJECTED"
+    ).length;
+
+    setText("totalApplications", totalApplications);
+    setText("totalInterviews", interviews);
+    setText("totalRejected", rejected);
+}
+async function applyForJob(jobId) {
+    try {
+        const result = await apiFetch("/api/applications/apply", {
+            method: "POST",
+            body: JSON.stringify({
+                jobId: jobId
+            })
+        });
+
+        await fetchApplications();
+        showToast("Application submitted!", "success");
+
+        return result;
+    } catch (error) {
+        showToast("Could not apply: " + error.message, "error");
+        return null;
+    }
 }
 
-async function updateApplication(id, appData) {
-  try {
-    const updated = await apiFetch(`/api/applications/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(appData)
-    });
-    const idx = state.applications.findIndex(a => a.id === id);
-    if (idx !== -1) state.applications[idx] = updated;
-    renderApplications();
-    showToast('Application updated!', 'success');
-    return updated;
-  } catch (err) {
-    showToast('Failed to update application: ' + err.message, 'error');
-    return null;
-  }
+async function updateApplicationStatus(id, status) {
+    try {
+        await apiFetch(`/api/applications/${id}/status`, {
+            method: "PUT",
+            body: JSON.stringify({ status })
+        });
+
+        await fetchApplications();
+        showToast("Application status updated.", "success");
+    } catch (error) {
+        showToast("Could not update status: " + error.message, "error");
+    }
 }
 
 async function deleteApplication(id) {
-  try {
-    await apiFetch(`/api/applications/${id}`, { method: 'DELETE' });
-    state.applications = state.applications.filter(a => a.id !== id);
-    renderApplications();
-    showToast('Application removed.', 'info');
-  } catch (err) {
-    showToast('Failed to delete application: ' + err.message, 'error');
-  }
-}
+    try {
+        await apiFetch(`/api/applications/${id}`, {
+            method: "DELETE"
+        });
 
-async function fetchApplicationsByJob(jobId) {
-  try {
-    const data = await apiFetch(`/api/applications/job/${jobId}`);
-    return Array.isArray(data) ? data : [];
-  } catch (err) {
-    showToast('Failed to load applications for job: ' + err.message, 'error');
-    return [];
-  }
-}
-async function aiAnalyze(prompt) {
-  return await apiFetch('/api/ai/analyze', {
-    method: 'POST',
-    body: JSON.stringify({ prompt })
-  });
-}
+        state.applications = state.applications.filter(
+            application => application.id !== id
+        );
 
-async function aiGenerateCoverLetter(jobTitle, company, userBackground) {
-  return await apiFetch('/api/ai/cover-letter', {
-    method: 'POST',
-    body: JSON.stringify({ jobTitle, company, userBackground })
-  });
-}
-
-async function aiInterviewTips(jobTitle, company) {
-  return await apiFetch('/api/ai/interview-tips', {
-    method: 'POST',
-    body: JSON.stringify({ jobTitle, company })
-  });
-}
-
-async function aiSkillGap(jobDescription, userSkills) {
-  return await apiFetch('/api/ai/skill-gap', {
-    method: 'POST',
-    body: JSON.stringify({ jobDescription, userSkills })
-  });
-}
-
-async function aiResumeReview(resumeText) {
-  return await apiFetch('/api/ai/resume-review', {
-    method: 'POST',
-    body: JSON.stringify({ resumeText })
-  });
-}
-
-// ── AI PANEL TRIGGER (wires to UI buttons) ───────────────────
-async function triggerAI(type) {
-  const output = document.getElementById('ai-output');
-  if (!output) return;
-
-  output.classList.add('visible');
-  output.innerHTML = '<span class="loading-dots"><span></span><span></span><span></span></span> Generating…';
-
-  try {
-    let result = '';
-    const selectedJob = state.jobs[0]; // use most recent job as context if available
-
-    if (type === 'coverLetter') {
-      const data = await aiGenerateCoverLetter(
-        selectedJob?.role || 'Software Engineer',
-        selectedJob?.company || 'the company',
-        'Experienced developer with strong problem-solving skills'
-      );
-      result = data?.content || data?.coverLetter || data?.result || JSON.stringify(data);
-
-    } else if (type === 'tips') {
-      const data = await aiInterviewTips(
-        selectedJob?.role || 'Software Engineer',
-        selectedJob?.company || 'the company'
-      );
-      result = data?.content || data?.tips || data?.result || JSON.stringify(data);
-
-    } else if (type === 'skillGap') {
-      const data = await aiSkillGap(
-        selectedJob?.description || selectedJob?.notes || 'Full stack development role',
-        'Java, Spring Boot, React, SQL'
-      );
-      result = data?.content || data?.skillGap || data?.result || JSON.stringify(data);
-
-    } else if (type === 'resumeReview') {
-      const data = await aiResumeReview(
-        'Paste resume text here for review'
-      );
-      result = data?.content || data?.review || data?.result || JSON.stringify(data);
-
-    } else {
-      // overview / general
-      const stats = `${state.jobs.length} total jobs tracked, ${state.jobs.filter(j => j.status === 'Interview').length} in interview, ${state.jobs.filter(j => j.status === 'Offer').length} offers received.`;
-      const data = await aiAnalyze(
-        `Analyze this job search: ${stats} Give 3 insights and 2 actionable tips.`
-      );
-      result = data?.content || data?.analysis || data?.result || JSON.stringify(data);
+        renderApplications();
+        showToast("Application removed.", "success");
+    } catch (error) {
+        showToast("Could not remove application: " + error.message, "error");
     }
-
-    output.textContent = result;
-  } catch (err) {
-    output.textContent = 'AI request failed: ' + err.message;
-  }
-}
-async function fetchResumes() {
-  try {
-    const data = await apiFetch('/api/resumes');
-    state.resumes = Array.isArray(data) ? data : (data.resumes || []);
-    renderResumeList();
-  } catch (err) {
-    showToast('Failed to load resumes: ' + err.message, 'error');
-  }
 }
 
-async function uploadResume(file) {
-  try {
-    const formData = new FormData();
-    formData.append('file', file);
-
-    const res = await fetch(BASE_URL + '/api/resumes/upload', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + getToken() },
-      body: formData
-      // NOTE: Do NOT set Content-Type manually — browser sets multipart boundary
-    });
-
-    if (!res.ok) throw new Error('Upload failed: ' + res.status);
-    const uploaded = await res.json();
-    state.resumes.unshift(uploaded);
-    renderResumeList();
-    showToast('Resume uploaded!', 'success');
-    return uploaded;
-  } catch (err) {
-    showToast('Resume upload failed: ' + err.message, 'error');
-    return null;
-  }
-}
-
-async function analyzeResume(resumeId) {
-  try {
-    showToast('Analyzing resume…', 'info');
-    const result = await apiFetch(`/api/resumes/${resumeId}/analyze`, { method: 'POST' });
-    const output = document.getElementById('ai-output');
-    if (output) {
-      output.classList.add('visible');
-      output.textContent = result?.analysis || result?.content || JSON.stringify(result);
-    }
-    showToast('Analysis complete!', 'success');
-    return result;
-  } catch (err) {
-    showToast('Resume analysis failed: ' + err.message, 'error');
-    return null;
-  }
-}
-
-async function extractSkills(resumeId) {
-  try {
-    const result = await apiFetch(`/api/resumes/${resumeId}/skills`, { method: 'POST' });
-    showToast('Skills extracted!', 'success');
-    return result;
-  } catch (err) {
-    showToast('Skill extraction failed: ' + err.message, 'error');
-    return null;
-  }
-}
-
-async function deleteResume(resumeId) {
-  try {
-    await apiFetch(`/api/resumes/${resumeId}`, { method: 'DELETE' });
-    state.resumes = state.resumes.filter(r => r.id !== resumeId);
-    renderResumeList();
-    showToast('Resume deleted.', 'info');
-  } catch (err) {
-    showToast('Failed to delete resume: ' + err.message, 'error');
-  }
-}
-function renderJobs() {
-  const grid = document.getElementById('jobs-grid');
-  if (!grid) return;
-
-  const filtered = state.jobs.filter(j => {
-    const matchFilter = state.filter === 'all' || j.status === state.filter;
-    const matchSearch =
-      !state.search ||
-      (j.company || '').toLowerCase().includes(state.search) ||
-      (j.role || j.title || '').toLowerCase().includes(state.search);
-    return matchFilter && matchSearch;
-  });
-
-  if (!filtered.length) {
-    grid.innerHTML = `<div class="empty-state">No applications found.</div>`;
-    return;
-  }
-
-  grid.innerHTML = filtered.map(j => {
-    const role    = j.role || j.title || j.jobTitle || 'Unknown Role';
-    const company = j.company || j.companyName || 'Unknown Company';
-    const status  = j.status || 'Applied';
-    const date    = j.date || j.appliedDate || j.createdAt || '';
-    const salary  = j.salary || j.salaryRange || '';
-    const notes   = j.notes || j.description || '';
-
-    return `
-    <div class="job-card" data-status="${esc(status)}" onclick="showJobDetail(${j.id})">
-      <div class="job-company">${esc(company)}</div>
-      <div class="job-role">${esc(role)}</div>
-      ${salary ? `<div class="job-salary">${esc(salary)}</div>` : ''}
-      <div class="job-footer">
-        <span class="badge badge-${esc(status)}">${esc(status)}</span>
-        <span class="job-date">${formatDate(date)}</span>
-      </div>
-      ${notes ? `<div class="job-notes">${esc(String(notes).substring(0, 100))}${notes.length > 100 ? '…' : ''}</div>` : ''}
-      <div class="job-actions" onclick="event.stopPropagation()">
-        <select class="status-select" onchange="handleStatusChange(${j.id}, this.value)">
-          ${['Applied', 'Interview', 'Offer', 'Rejected', 'Ghosted']
-            .map(s => `<option${s === status ? ' selected' : ''}>${s}</option>`)
-            .join('')}
-        </select>
-        <button class="job-action-btn" onclick="openEditJobModal(${j.id})">Edit</button>
-        <button class="job-action-btn danger" onclick="confirmDeleteJob(${j.id})">Delete</button>
-        ${j.url ? `<button class="job-action-btn" onclick="openLink('${esc(j.url)}')">Link ↗</button>` : ''}
-      </div>
-    </div>`;
-  }).join('');
-}
-
-async function handleStatusChange(id, newStatus) {
-  const j = state.jobs.find(x => x.id === id);
-  if (!j) return;
-  await updateJob(id, { ...j, status: newStatus });
-}
-
-function showJobDetail(id) {
-  const j = state.jobs.find(x => x.id === id);
-  if (!j) return;
-  showToast(`${j.company || j.companyName} — ${j.role || j.title}`, 'info');
-}
-
-function confirmDeleteJob(id) {
-  const j = state.jobs.find(x => x.id === id);
-  if (!j) return;
-  if (confirm(`Delete application to ${j.company || j.companyName}?`)) {
-    deleteJob(id);
-  }
-}
 function renderApplications() {
-  const container = document.getElementById('applications-list');
-  if (!container) return;
+    const container = document.getElementById("applications-list");
+    if (!container) return;
 
-  if (!state.applications.length) {
-    container.innerHTML = '<div class="empty-state">No applications yet.</div>';
-    return;
-  }
+    if (!state.applications.length) {
+        container.textContent = "No applications yet.";
+        return;
+    }
 
-  container.innerHTML = state.applications.map(a => `
-    <div class="application-item">
-      <span>${esc(a.jobTitle || a.job?.title || 'N/A')}</span>
-      <span>${esc(a.status || '')}</span>
-      <span>${formatDate(a.appliedDate || a.createdAt || '')}</span>
-      <button onclick="deleteApplication(${a.id})">Remove</button>
-    </div>
-  `).join('');
+    container.innerHTML = state.applications.map(application => {
+        const jobTitle =
+            application.jobTitle ||
+            application.job?.title ||
+            application.job?.role ||
+            "Job";
+
+        return `
+            <div class="application-item">
+                <span>${escapeHtml(jobTitle)}</span>
+                <span>${escapeHtml(application.status || "")}</span>
+                <span>${escapeHtml(formatDate(
+                    application.appliedDate || application.createdAt
+                ))}</span>
+                <button type="button"
+                    onclick="deleteApplication(${Number(application.id)})">
+                    Remove
+                </button>
+            </div>
+        `;
+    }).join("");
 }
-function renderResumeList() {
-  const container = document.getElementById('resume-list');
-  if (!container) return;
+async function loadDashboardStats() {
+    const totalJobsElement = document.getElementById("totalJobs");
+    const totalApplicationsElement =
+        document.getElementById("totalApplications");
 
-  if (!state.resumes.length) {
-    container.innerHTML = '<div class="empty-state">No resumes uploaded.</div>';
-    return;
-  }
+    if (!totalJobsElement && !totalApplicationsElement) {
+        console.warn(
+            "Dashboard stats skipped: expected HTML elements were not found."
+        );
+        return;
+    }
 
-  container.innerHTML = state.resumes.map(r => `
-    <div class="resume-item">
-      <span>${esc(r.fileName || r.name || 'Resume')}</span>
-      <span class="job-date">${formatDate(r.uploadedAt || r.createdAt || '')}</span>
-      <div class="job-actions">
-        <button class="job-action-btn" onclick="analyzeResume(${r.id})">Analyze</button>
-        <button class="job-action-btn" onclick="extractSkills(${r.id})">Skills</button>
-        <button class="job-action-btn danger" onclick="deleteResume(${r.id})">Delete</button>
-      </div>
-    </div>
-  `).join('');
-}
-let _editingJobId = null;
+    console.log("Loading dashboard statistics...");
+    console.log("JWT token present:", Boolean(getToken()));
 
-function openJobModal() {
-  _editingJobId = null;
-  const title = document.getElementById('modal-title');
-  if (title) title.textContent = 'Add Application';
-  _clearJobForm();
-  const dateEl = document.getElementById('m-date');
-  if (dateEl) dateEl.value = new Date().toISOString().split('T')[0];
-  document.getElementById('job-modal')?.classList.remove('hidden');
-}
+    try {
+        const stats = await apiFetch("/api/dashboard/stats");
 
-async function openEditJobModal(id) {
-  const j = state.jobs.find(x => x.id === id) || await fetchJobById(id);
-  if (!j) return;
-  _editingJobId = id;
-  const title = document.getElementById('modal-title');
-  if (title) title.textContent = 'Edit Application';
+        console.log("Dashboard stats received:", stats);
 
-  _setField('m-company',  j.company || j.companyName || '');
-  _setField('m-role',     j.role || j.title || j.jobTitle || '');
-  _setField('m-url',      j.url || j.jobUrl || '');
-  _setField('m-status',   j.status || 'Applied');
-  _setField('m-date',     (j.date || j.appliedDate || '').split('T')[0] || new Date().toISOString().split('T')[0]);
-  _setField('m-salary',   j.salary || j.salaryRange || '');
-  _setField('m-location', j.location || '');
-  _setField('m-notes',    j.notes || j.description || '');
+        setText("totalJobs", stats?.totalJobs ?? 0);
+        setText("totalApplications", stats?.totalApplications ?? 0);
+        setText("totalInterviews", stats?.interviews ?? 0);
+        setText("totalOffers", stats?.offers ?? 0);
+        setText("totalRejected", stats?.rejected ?? 0);
 
-  document.getElementById('job-modal')?.classList.remove('hidden');
-}
-
-function closeJobModal() {
-  document.getElementById('job-modal')?.classList.add('hidden');
-  _clearJobForm();
-  _editingJobId = null;
-}
-
-async function saveJob() {
-  const company = document.getElementById('m-company')?.value.trim();
-  const role    = document.getElementById('m-role')?.value.trim();
-
-  if (!company || !role) {
-    showToast('Company and role are required', 'error');
-    return;
-  }
-
-  // Map to field names your Spring Boot Job model likely expects
-  const jobData = {
-    company:     company,
-    companyName: company,       // include both for compatibility
-    role:        role,
-    title:       role,
-    jobTitle:    role,
-    status:      document.getElementById('m-status')?.value || 'Applied',
-    date:        document.getElementById('m-date')?.value || '',
-    appliedDate: document.getElementById('m-date')?.value || '',
-    url:         document.getElementById('m-url')?.value.trim() || '',
-    jobUrl:      document.getElementById('m-url')?.value.trim() || '',
-    salary:      document.getElementById('m-salary')?.value.trim() || '',
-    salaryRange: document.getElementById('m-salary')?.value.trim() || '',
-    location:    document.getElementById('m-location')?.value.trim() || '',
-    notes:       document.getElementById('m-notes')?.value.trim() || '',
-    description: document.getElementById('m-notes')?.value.trim() || ''
-  };
-
-  let result;
-  if (_editingJobId) {
-    result = await updateJob(_editingJobId, jobData);
-  } else {
-    result = await createJob(jobData);
-  }
-
-  if (result) closeJobModal();
-}
-
-// ── FORM UTILITIES ────────────────────────────────────────────
-function _setField(id, value) {
-  const el = document.getElementById(id);
-  if (el) el.value = value;
-}
-
-function _clearJobForm() {
-  ['m-company', 'm-role', 'm-url', 'm-notes', 'm-salary', 'm-location'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.value = '';
-  });
-  _setField('m-status', 'Applied');
-}
-function handleResumeUpload(inputEl) {
-  const file = inputEl?.files?.[0];
-  if (!file) return;
-  if (!file.name.match(/\.(pdf|doc|docx)$/i)) {
-    showToast('Only PDF, DOC, DOCX files are allowed', 'error');
-    return;
-  }
-  uploadResume(file);
+    } catch (error) {
+        console.error(
+            "Could not load dashboard stats:",
+            error.message
+        );
+    }
 }
 function updateStats() {
-  const j        = state.jobs;
-  const total    = j.length;
-  const interview = j.filter(x => x.status === 'Interview').length;
-  const offer    = j.filter(x => x.status === 'Offer').length;
-  const rejected = j.filter(x => x.status === 'Rejected').length;
+    const jobs = state.jobs;
 
-  _setTextContent('s-total',     total);
-  _setTextContent('s-interview', interview);
-  _setTextContent('s-offer',     offer);
-  _setTextContent('s-rejected',  rejected);
+    const interviews = jobs.filter(
+        job => normalizeStatus(job.status) === "interview"
+    ).length;
 
-  const rate = total ? Math.round((interview + offer) / total * 100) : 0;
-  _setTextContent('s-rate', rate + '% rate');
+    const offers = jobs.filter(
+        job => normalizeStatus(job.status) === "offer"
+    ).length;
+
+    const rejected = jobs.filter(
+        job => normalizeStatus(job.status) === "rejected"
+    ).length;
+
+    setText("s-total", jobs.length);
+    setText("s-interview", interviews);
+    setText("s-offer", offers);
+    setText("s-rejected", rejected);
+
+    const rate = jobs.length
+        ? Math.round(((interviews + offers) / jobs.length) * 100)
+        : 0;
+
+    setText("s-rate", rate + "% rate");
 }
 
 function updateSidebarCounts() {
-  const counts = { Applied: 0, Interview: 0, Offer: 0, Rejected: 0, Ghosted: 0 };
-  state.jobs.forEach(j => { if (counts[j.status] !== undefined) counts[j.status]++; });
+    const statuses = ["Applied", "Interview", "Offer", "Rejected", "Ghosted"];
 
-  _setTextContent('cnt-all', state.jobs.length);
-  Object.keys(counts).forEach(k => _setTextContent('cnt-' + k, counts[k]));
+    setText("cnt-all", state.jobs.length);
+
+    statuses.forEach(status => {
+        const count = state.jobs.filter(
+            job => normalizeStatus(job.status) === normalizeStatus(status)
+        ).length;
+
+        setText("cnt-" + status, count);
+    });
 }
-
-function _setTextContent(id, value) {
-  const el = document.getElementById(id);
-  if (el) el.textContent = value;
-}
-
-// ── CHARTS ────────────────────────────────────────────────────
-let _chartInstance = null;
+let chartInstance = null;
 
 function reRenderCharts() {
-  const canvas = document.getElementById('statusChart') || document.getElementById('pieChart');
-  if (!canvas || typeof Chart === 'undefined') return;
+    const canvas =
+        document.getElementById("statusChart") ||
+        document.getElementById("pieChart");
 
-  const statuses = ['Applied', 'Interview', 'Offer', 'Rejected', 'Ghosted'];
-  const counts   = statuses.map(s => state.jobs.filter(j => j.status === s).length);
-  const colors   = ['#6c8bff', '#fbbf24', '#34d399', '#f87171', '#8890aa'];
+    if (!canvas || typeof Chart === "undefined") return;
 
-  if (_chartInstance) _chartInstance.destroy();
-
-  _chartInstance = new Chart(canvas.getContext('2d'), {
-    type: 'doughnut',
-    data: {
-      labels: statuses,
-      datasets: [{
-        data: counts,
-        backgroundColor: colors,
-        borderWidth: 0,
-        hoverOffset: 4
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      cutout: '68%',
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: { label: c => ' ' + c.label + ': ' + c.raw }
-        }
-      }
+    if (chartInstance) {
+        chartInstance.destroy();
     }
-  });
 
-  // update custom legend
-  const legend = document.getElementById('chart-legend');
-  if (legend) {
-    legend.innerHTML = statuses
-      .map((l, i) => `<span style="display:flex;align-items:center;gap:5px">
-        <span style="width:9px;height:9px;border-radius:2px;background:${colors[i]};flex-shrink:0"></span>
-        ${l} ${counts[i]}
-      </span>`)
-      .join('');
-  }
+    const statuses = ["Applied", "Interview", "Offer", "Rejected", "Ghosted"];
+
+    const counts = statuses.map(status =>
+        state.jobs.filter(
+            job => normalizeStatus(job.status) === normalizeStatus(status)
+        ).length
+    );
+
+    chartInstance = new Chart(canvas.getContext("2d"), {
+        type: "doughnut",
+        data: {
+            labels: statuses,
+            datasets: [{
+                data: counts,
+                backgroundColor: [
+                    "#6c8bff",
+                    "#fbbf24",
+                    "#34d399",
+                    "#f87171",
+                    "#8890aa"
+                ],
+                borderWidth: 0
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: "68%"
+        }
+    });
 }
-function handleSearch(value) {
-  state.search = value.toLowerCase().trim();
-  renderJobs();
+
+function setText(id, value) {
+    const element = document.getElementById(id);
+
+    if (element) {
+        element.textContent = String(value);
+    }
 }
 
-function setFilter(filter, el) {
-  state.filter = filter;
-  document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active'));
-  if (el) el.classList.add('active');
-
-  const labels = {
-    all: 'All Applications', Applied: 'Applied', Interview: 'Interview Stage',
-    Offer: 'Offers', Rejected: 'Rejected', Ghosted: 'Ghosted'
-  };
-  _setTextContent('view-label', labels[filter] || filter);
-  renderJobs();
+function normalizeStatus(value) {
+    return String(value || "").trim().toLowerCase();
 }
 
-// ── ALIAS for backwards compat with sidebar onclick="setView(...)" ──
-function setView(filter, el) { setFilter(filter, el); }
-function openLink(url) {
-  if (url) window.open(url, '_blank', 'noopener,noreferrer');
+function escapeHtml(value) {
+    return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
+
+function formatDate(value) {
+    if (!value) return "";
+
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+        return String(value);
+    }
+
+    return date.toLocaleDateString("en-IN", {
+        day: "numeric",
+        month: "short",
+        year: "numeric"
+    });
+}
+
+let currentTheme = localStorage.getItem("nh_theme") || "dark";
+
+function applyTheme() {
+    document.documentElement.setAttribute("data-theme", currentTheme);
+
+    const button = document.getElementById("theme-btn");
+
+    if (button) {
+        button.textContent = currentTheme === "dark" ? "◑" : "◐";
+    }
+}
+
+function toggleTheme() {
+    currentTheme = currentTheme === "dark" ? "light" : "dark";
+
+    localStorage.setItem("nh_theme", currentTheme);
+    applyTheme();
+    reRenderCharts();
 }
 
 function toggleSidebar() {
-  const sidebar = document.getElementById('sidebar');
-  if (sidebar) sidebar.classList.toggle('collapsed');
+    document.getElementById("sidebar")?.classList.toggle("collapsed");
 }
 
 function toggleNotif() {
-  const dropdown = document.getElementById('notif-dropdown');
-  if (dropdown) dropdown.classList.toggle('hidden');
+    document.getElementById("notif-dropdown")?.classList.toggle("hidden");
 }
+
 function toggleProfile() {
-  showToast('Profile settings coming soon', 'info');
+    showToast("Profile settings coming soon.", "info");
 }
 
-function togglePass(btn) {
-  const input = btn?.previousElementSibling;
-  if (!input) return;
-  input.type = input.type === 'password' ? 'text' : 'password';
-  btn.textContent = input.type === 'password' ? '👁' : '🙈';
-}
-function navigate(el) {
-  const page = el?.dataset?.page;
-  if (!page) return;
+function togglePass(button) {
+    const input = button?.previousElementSibling;
+    if (!input) return;
 
-  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  const target = document.getElementById('page-' + page);
-  if (target) target.classList.add('active');
-
-  document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
-  el.classList.add('active');
-
-  const labels = {
-    dashboard: 'Dashboard',
-    tracker:   'Job Tracker',
-    resume:    'Resume AI',
-    analytics: 'Analytics'
-  };
-  _setTextContent('topbar-title', labels[page] || page);
-  if (page === 'tracker') {
-    const addBtn = document.querySelector('#page-tracker .btn-primary');
-    if (addBtn && !addBtn.onclick) addBtn.onclick = openJobModal;
-  }
-}
-function esc(s) {
-  return String(s || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    input.type = input.type === "password" ? "text" : "password";
 }
 
-function formatDate(d) {
-  if (!d) return '';
-  try {
-    return new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
-  } catch (_) {
-    return d;
-  }
+function navigate(element) {
+    const page = element?.dataset?.page;
+    if (!page) return;
+
+    document.querySelectorAll(".page").forEach(item => {
+        item.classList.remove("active");
+    });
+
+    document.getElementById("page-" + page)?.classList.add("active");
+
+    document.querySelectorAll(".nav-item").forEach(item => {
+        item.classList.remove("active");
+    });
+
+    element.classList.add("active");
+
+    const labels = {
+        dashboard: "Dashboard",
+        tracker: "Job Tracker",
+        analytics: "Analytics"
+    };
+
+    setText("topbar-title", labels[page] || page);
 }
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') closeJobModal();
-  if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-    e.preventDefault();
-    document.getElementById('search-input')?.focus();
-  }
-});
 async function initApp() {
-  await fetchCurrentUser();
-  try {
-    await fetchJobs();
-  } catch (_) {
-      state.jobs = (window.APP_JOBS && Array.isArray(window.APP_JOBS)) ? window.APP_JOBS : [];
-    renderJobs();
-    updateStats();
-    updateSidebarCounts();
-    reRenderCharts();
-  }
-  try { await fetchApplications(); } catch (_) {}
-  try { await fetchResumes(); } catch (_) {}
- document.querySelectorAll('.counter[data-target]').forEach(el => {
-    const target = parseInt(el.getAttribute('data-target')) || 0;
-    let current = 0;
-    const step = Math.ceil(target / 40);
-    const timer = setInterval(() => {
-      current = Math.min(current + step, target);
-      el.textContent = current;
-      if (current >= target) clearInterval(timer);
-    }, 30);
-  });
+    if (!getToken()) {
+        window.location.replace("/login");
+        return;
+    }
+
+    // Do not call fetchCurrentUser() until /api/auth/me exists.
+    try {
+        await fetchJobs();
+    } catch (error) {
+        console.error("Could not initialize jobs:", error);
+    }
+
+    await fetchApplications();
+    await loadDashboardStats();
 }
-(function bootstrap() {
-  if (getToken()) {
-    showAppSection();
-    initApp();
-  } else {
-    showAuthSection();
-  }
-})();
+
+function showAuthSection() {
+    document.getElementById("auth-overlay")?.classList.remove("hidden");
+    document.getElementById("app")?.classList.add("hidden");
+}
+
+function showAppSection() {
+    document.getElementById("auth-overlay")?.classList.add("hidden");
+    document.getElementById("app")?.classList.remove("hidden");
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+    applyTheme();
+
+    // Attach exactly one submit handler to each form found on this page.
+    const loginForm = document.getElementById("loginForm");
+
+    if (loginForm) {
+        loginForm.addEventListener("submit", handleLoginSubmit);
+    }
+
+    const registerForm = document.getElementById("registerForm");
+
+    if (registerForm) {
+        registerForm.addEventListener("submit", handleRegisterSubmit);
+    }
+
+    const logoutButton = document.getElementById("logoutButton");
+
+    if (logoutButton) {
+        logoutButton.addEventListener("click", logout);
+    }
+
+    // For the single-page layout with an authentication overlay.
+    if (document.getElementById("auth-overlay")) {
+        if (getToken()) {
+            showAppSection();
+            initApp();
+        } else {
+            showAuthSection();
+        }
+    } else if (
+        document.getElementById("jobs-grid") ||
+        document.getElementById("applications-list") ||
+        document.getElementById("totalApplications")
+    ) {
+        // For separate dashboard pages.
+        if (!getToken()) {
+            window.location.replace("/login");
+            return;
+        }
+
+        initApp();
+    }
+
+    document.addEventListener("keydown", event => {
+        if (event.key === "Escape") {
+            document.getElementById("job-modal")?.classList.add("hidden");
+        }
+
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+            event.preventDefault();
+            document.getElementById("search-input")?.focus();
+        }
+    });
+});
